@@ -10,7 +10,7 @@ fn main() {
     });
     let start = Instant::now();
     for i in 0..10_000_000 {
-        let content = Bencode::parse(&file_content);
+        let content = Bencode::build(&file_content);
     }
 
     let duration = start.elapsed();
