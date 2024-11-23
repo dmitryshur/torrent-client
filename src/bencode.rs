@@ -25,44 +25,17 @@ struct File {
 }
 
 #[derive(Debug, PartialEq)]
-struct Info {
-    length: Option<u64>,
-    name: String,
-    piece_length: u64,
-    files: Option<Vec<File>>,
-    pieces: Vec<u8>,
+enum Files {
+    Single(u64),
+    Multiple(Vec<File>),
 }
 
-impl FromBencode for File {
-    fn decode_bencode_object(object: Object) -> Result<Self, BencodeError>
-    where
-        Self: Sized,
-    {
-        let mut length = None;
-        let mut path = None;
-
-        let mut dict_dec = object.try_into_dictionary()?;
-        while let Some(pair) = dict_dec.next_pair()? {
-            match pair {
-                (b"length", value) => {
-                    length = value
-                        .try_into_integer()
-                        // TODO: handle error
-                        .map(|value| value.parse::<u64>().unwrap())
-                        .map(Some)?
-                }
-                (b"path", value) => {
-                    path = Vec::decode_bencode_object(value).map(Some)?;
-                }
-                (_, _) => {}
-            }
-        }
-
-        let length = length.ok_or_else(|| BencodeError::missing_field("length"))?;
-        let path = path.ok_or_else(|| BencodeError::missing_field("path"))?;
-
-        Ok(File { length, path })
-    }
+#[derive(Debug, PartialEq)]
+struct Info {
+    name: String,
+    piece_length: u64,
+    files: Files,
+    pieces: Vec<u8>,
 }
 
 impl FromBencode for Bencode {
@@ -145,15 +118,51 @@ impl FromBencode for Info {
         let piece_length =
             piece_length.ok_or_else(|| BencodeError::missing_field("piece_length"))?;
         let pieces = pieces.ok_or_else(|| BencodeError::missing_field("pieces"))?;
-        let files = if files.is_empty() { None } else { Some(files) };
+        let files = if files.is_empty() {
+            // TODO: handle error
+            Files::Single(length.unwrap())
+        } else {
+            Files::Multiple(files)
+        };
 
         Ok(Info {
-            length,
             name,
             piece_length,
             files,
             pieces,
         })
+    }
+}
+
+impl FromBencode for File {
+    fn decode_bencode_object(object: Object) -> Result<Self, BencodeError>
+    where
+        Self: Sized,
+    {
+        let mut length = None;
+        let mut path = None;
+
+        let mut dict_dec = object.try_into_dictionary()?;
+        while let Some(pair) = dict_dec.next_pair()? {
+            match pair {
+                (b"length", value) => {
+                    length = value
+                        .try_into_integer()
+                        // TODO: handle error
+                        .map(|value| value.parse::<u64>().unwrap())
+                        .map(Some)?
+                }
+                (b"path", value) => {
+                    path = Vec::decode_bencode_object(value).map(Some)?;
+                }
+                (_, _) => {}
+            }
+        }
+
+        let length = length.ok_or_else(|| BencodeError::missing_field("length"))?;
+        let path = path.ok_or_else(|| BencodeError::missing_field("path"))?;
+
+        Ok(File { length, path })
     }
 }
 
@@ -169,10 +178,9 @@ mod tests {
         });
         let parsed_bencode = Bencode::parse(&file_content);
         let expected_info = Info {
-            length: None,
             name: "The.Penguin.S01.WEBDL.720p".to_string(),
             piece_length: 8388608,
-            files: Some(vec![
+            files: Files::Multiple(vec![
                 File {
                     length: 3698684676,
                     path: vec!["The.Penguin.S01E01.WEBDL.720p.RGzsRutracker.mkv".to_string()],
@@ -224,18 +232,42 @@ mod tests {
 
         let parsed_bencode = Bencode::parse(&file_content);
         let expected_info = Info {
-            length: Some(40580383319),
             name: "Inception.2010.2160p.UHD.BDRip.HDR.x265.DD+5.1-VoX.mkv".to_string(),
             piece_length: 8388608,
-            files: None,
+            files: Files::Single(40580383319),
             pieces: vec![],
         };
 
         assert_eq!(parsed_bencode.announce, "http://bt2.t-ru.org/ann");
-        assert_eq!(parsed_bencode.info.length, expected_info.length);
+        assert_eq!(parsed_bencode.info.files, expected_info.files);
         assert_eq!(parsed_bencode.info.name, expected_info.name);
         assert_eq!(parsed_bencode.info.piece_length, expected_info.piece_length);
         assert_eq!(parsed_bencode.info.files, expected_info.files);
         assert_eq!(parsed_bencode.info.pieces.len(), 96760);
+    }
+
+    #[test]
+    fn test_sample_torrent() {
+        let file_content = fs::read("torrent_files/sample.torrent").unwrap_or_else(|err| {
+            panic!("Error reading file: {:?}", err);
+        });
+
+        let parsed_bencode = Bencode::parse(&file_content);
+        let expected_info = Info {
+            name: "sample.txt".to_string(),
+            piece_length: 32768,
+            files: Files::Single(92063),
+            pieces: vec![],
+        };
+
+        assert_eq!(
+            parsed_bencode.announce,
+            "http://bittorrent-test-tracker.codecrafters.io/announce"
+        );
+        assert_eq!(parsed_bencode.info.files, expected_info.files);
+        assert_eq!(parsed_bencode.info.name, expected_info.name);
+        assert_eq!(parsed_bencode.info.piece_length, expected_info.piece_length);
+        assert_eq!(parsed_bencode.info.files, expected_info.files);
+        assert_eq!(parsed_bencode.info.pieces.len(), 60);
     }
 }
